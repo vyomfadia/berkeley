@@ -229,7 +229,7 @@ class RealtimeVoiceAgent:
             "move the camera", "rotate the camera", "turn the camera",
             "point the camera", "look this way", "show me what's",
             "this direction", "that way", "over here", "pan the camera",
-            "camera", "rotate", "turn", "move", "point"
+            "camera", "rotate", "turn", "move", "point", "look", "left", "right"
         ]
 
         text_lower = text.lower()
