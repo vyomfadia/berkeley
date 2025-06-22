@@ -2,33 +2,27 @@ import cv2
 import mediapipe as mp
 import time
 
-# Initialize MediaPipe Hands
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
     static_image_mode=False,
-    max_num_hands=2,
+    max_num_hands=1,
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5
 )
+
 mp_drawing = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
 
-# Initialize webcam
-cap = cv2.VideoCapture(0)  # Use 0 for built-in webcam
-
+cap = cv2.VideoCapture(1)
 while cap.isOpened():
     success, image = cap.read()
     if not success:
-        print("Failed to read from webcam")
+        print("failed to read from webcam")
         continue
 
-    # Get image dimensions
     h, w, c = image.shape
-
-    # Flip the image horizontally for a selfie-view display
     image = cv2.flip(image, 1)
 
-    # Convert the BGR image to RGB
     results = hands.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
 
     # Draw hand landmarks
