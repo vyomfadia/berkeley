@@ -44,10 +44,7 @@ while cap.isOpened():
                         (10, 30 + idx * 30), cv2.FONT_HERSHEY_SIMPLEX,
                         0.7, (0, 255, 0), 2)
 
-    # Display the resulting frame
     cv2.imshow('MediaPipe Hand Tracking', image)
-
-    # Exit on 'q' press
     if cv2.waitKey(5) & 0xFF == ord('q'):
         break
 
