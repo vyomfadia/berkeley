@@ -1,368 +1,243 @@
-import base64
 import json
-import logging
 import os
-import queue
 import tempfile
-import threading
+import time
 import wave
-from typing import Optional
 
-import asyncio
 import pyaudio
-import websockets
 from dotenv import load_dotenv
+from openai import OpenAI
+import serial
 
 # Load environment variables
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-
-class RealtimeVoiceAgent:
+class VoiceAgent:
     def __init__(self):
-        self.api_key = os.getenv("OPENAI_API_KEY")
-        if not self.api_key:
-            raise ValueError("OPENAI_API_KEY environment variable is required")
-
-        # WebSocket connection
-        self.websocket: Optional[websockets.WebSocketServerProtocol] = None
-        self.is_connected = False
-
-        # Audio settings
-        self.sample_rate = 24000  # Required by Realtime API
-        self.chunk_size = 1024
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.is_listening = False
+        # Audio recording settings
+        self.chunk = 1024
         self.format = pyaudio.paInt16
         self.channels = 1
-        self.bytes_per_sample = 2  # 16-bit audio
+        self.rate = 44100
+        self.record_seconds = 3  # Record for 3 seconds when triggered
 
-        # Audio components
+        # Initialize PyAudio
         self.audio = pyaudio.PyAudio()
-        self.input_stream = None
 
-        # Audio queues for threading
-        self.audio_input_queue = queue.Queue()
-        self.audio_output_buffer = bytearray()
-        self.audio_buffer_lock = threading.Lock()
+        # Initialize Serial connection
+        self.serial = serial.Serial('/dev/tty.usbserial-0001', 115200)
 
-        # Control flags
-        self.is_recording = False
-        self.should_stop = False
-        self.is_speaking = False
+    def record_audio(self):
+        """Record audio from microphone"""
+        print("Listening for voice command...")
 
-        # Audio playback thread
-        self.playback_thread = None
-        self.playback_event = threading.Event()
+        stream = self.audio.open(
+            format=self.format,
+            channels=self.channels,
+            rate=self.rate,
+            input=True,
+            frames_per_buffer=self.chunk
+        )
 
-    async def connect_to_realtime_api(self):
-        """Connect to OpenAI Realtime API via WebSocket"""
-        url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "OpenAI-Beta": "realtime=v1"
+        frames = []
+
+        # Record for specified duration
+        for i in range(0, int(self.rate / self.chunk * self.record_seconds)):
+            data = stream.read(self.chunk)
+            frames.append(data)
+
+        stream.stop_stream()
+        stream.close()
+
+        # Save to temporary file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        wf = wave.open(temp_file.name, 'wb')
+        wf.setnchannels(self.channels)
+        wf.setsampwidth(self.audio.get_sample_size(self.format))
+        wf.setframerate(self.rate)
+        wf.writeframes(b''.join(frames))
+        wf.close()
+
+        return temp_file.name
+
+    def speech_to_text(self, audio_file_path):
+        """Convert speech to text using OpenAI Whisper"""
+        try:
+            with open(audio_file_path, "rb") as audio_file:
+                transcript = self.client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file
+                )
+            return transcript.text
+        except Exception as e:
+            print(f"Error in speech-to-text: {e}")
+            return None
+
+    def analyze_command(self, text):
+        """Use LLM to analyze if the command should trigger camera rotation"""
+        system_prompt = """You are a voice command analyzer for a camera control system. 
+        Analyze the given text and determine if it's a command to rotate or move the camera based on hand pointing direction.
+        The microphone and STT is poor so assume intent.
+        
+        Something like "And you look foward" probably means "can you look forward". If someone asks "Yo, what's on my left?" take that as a command to look left.
+
+        HIGH CONFIDENCE phrases (should be 0.8-1.0):
+        - "move the camera"
+        - "rotate the camera"
+        - "turn the camera"
+        - "point the camera"
+        - "rotate the camera in the direction I'm pointing"
+        - "show me what's in this direction"
+        - "this direction" (when used as a command)
+        - "look this way"
+        - "pan the camera",
+        - "to the left/right"
+        - "could you check this area for me"
+        - "back to the right"
+        - "look back to the middle"
+        - Pointing
+        - "over here"
+        - "that way"
+
+        Assign high confidence (0.6+) to clear camera movement commands.
+
+        Respond with a JSON object:
+        {
+            "should_act": true/false,
+            "confidence": 0.0-1.0,
+            "direction": null/left/right/forward # only if left/right/forward is specifically mentioned
+            "reasoning": "brief explanation"
         }
+        """
 
         try:
-            self.websocket = await websockets.connect(url, additional_headers=headers)
-            self.is_connected = True
-            logger.info("✅ Connected to OpenAI Realtime API")
-
-            # Configure the session
-            await self.configure_session()
-
-        except Exception as e:
-            logger.error(f"❌ Failed to connect to Realtime API: {e}")
-            raise
-
-    async def configure_session(self):
-        """Configure the Realtime API session"""
-        session_config = {
-            "type": "session.update",
-            "session": {
-                "modalities": ["text", "audio"],
-                "instructions": """You are a voice assistant for a camera control system. 
-                Listen for commands to rotate or move the camera based on hand pointing directions.
-
-                When you detect camera movement commands like:
-                - "move the camera"
-                - "rotate the camera" 
-                - "turn the camera"
-                - "point the camera"
-                - "look this way"
-                - "show me what's in this direction"
-
-                Respond with brief acknowledgment like "Rotating camera now" or "Moving camera to that direction".
-                Keep responses very short and natural.""",
-                "voice": "alloy",
-                "input_audio_format": "pcm16",
-                "output_audio_format": "pcm16",
-                "input_audio_transcription": {
-                    "model": "whisper-1"
-                },
-                "turn_detection": {
-                    "type": "server_vad",
-                    "threshold": 0.5,
-                    "prefix_padding_ms": 300,
-                    "silence_duration_ms": 500
-                },
-                "tools": []
-            }
-        }
-
-        await self.send_event(session_config)
-        logger.info("📋 Session configured")
-
-    async def send_event(self, event):
-        """Send an event to the Realtime API"""
-        if self.websocket and self.is_connected:
-            await self.websocket.send(json.dumps(event))
-
-    def play_audio_chunk(self, audio_data):
-        """Play audio data using a separate thread and temporary file"""
-        try:
-            # Create temporary file
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                # Create WAV file
-                with wave.open(temp_file.name, 'wb') as wav_file:
-                    wav_file.setnchannels(self.channels)
-                    wav_file.setsampwidth(self.bytes_per_sample)
-                    wav_file.setframerate(self.sample_rate)
-                    wav_file.writeframes(audio_data)
-
-                # Play using system command (works better than PyAudio for playback)
-                os.system(f"afplay {temp_file.name}")
-
-                # Clean up
-                os.unlink(temp_file.name)
-
-        except Exception as e:
-            logger.error(f"❌ Error playing audio: {e}")
-
-    def start_playback_thread(self):
-        """Start the audio playback thread"""
-        if self.playback_thread is None or not self.playback_thread.is_alive():
-            self.playback_thread = threading.Thread(target=self.audio_playback_worker, daemon=True)
-            self.playback_thread.start()
-            logger.info("🔊 Audio playback thread started")
-
-    def audio_playback_worker(self):
-        """Worker thread for audio playback"""
-        while not self.should_stop:
-            try:
-                # Wait for audio data to be available
-                if len(self.audio_output_buffer) > 0:
-                    with self.audio_buffer_lock:
-                        # Get all available audio data
-                        audio_data = bytes(self.audio_output_buffer)
-                        self.audio_output_buffer.clear()
-
-                    if len(audio_data) > 0:
-                        # Play the audio
-                        self.play_audio_chunk(audio_data)
-
-                # Small delay to prevent busy waiting
-                threading.Event().wait(0.1)
-
-            except Exception as e:
-                logger.error(f"❌ Error in playback worker: {e}")
-
-    async def handle_server_events(self):
-        """Handle incoming events from the Realtime API"""
-        try:
-            async for message in self.websocket:
-                event = json.loads(message)
-                event_type = event.get("type")
-
-                if event_type == "session.created":
-                    logger.info("🎉 Session created successfully")
-
-                elif event_type == "session.updated":
-                    logger.info("🔄 Session updated")
-
-                elif event_type == "input_audio_buffer.speech_started":
-                    logger.info("🎤 Speech started")
-                    self.is_speaking = True
-                    # Clear any pending audio output to avoid conflicts
-                    with self.audio_buffer_lock:
-                        self.audio_output_buffer.clear()
-
-                elif event_type == "input_audio_buffer.speech_stopped":
-                    logger.info("🔇 Speech stopped")
-                    self.is_speaking = False
-
-                elif event_type == "conversation.item.input_audio_transcription.completed":
-                    transcript = event.get("transcript", "")
-                    logger.info(f"🗣️  Heard: '{transcript}'")
-
-                    # Analyze if this is a camera command
-                    if self.is_camera_command(transcript):
-                        logger.info("🎥 Camera command detected!")
-                        self.trigger_camera_action()
-
-                elif event_type == "response.audio.delta":
-                    # Receive audio data from the API and buffer it
-                    if not self.is_speaking:  # Only play if user is not speaking
-                        audio_data = base64.b64decode(event["delta"])
-                        with self.audio_buffer_lock:
-                            self.audio_output_buffer.extend(audio_data)
-
-                elif event_type == "response.audio.done":
-                    logger.info("🔊 Audio response completed")
-
-                elif event_type == "response.done":
-                    logger.info("✅ Response completed")
-
-                elif event_type == "error":
-                    logger.error(f"❌ API Error: {event}")
-
-        except websockets.exceptions.ConnectionClosed:
-            logger.info("🔌 WebSocket connection closed")
-            self.is_connected = False
-        except Exception as e:
-            logger.error(f"❌ Error handling server events: {e}")
-
-    def is_camera_command(self, text: str) -> bool:
-        """Analyze if the text contains camera movement commands"""
-        camera_keywords = [
-            "move the camera", "rotate the camera", "turn the camera",
-            "point the camera", "look this way", "show me what's",
-            "this direction", "that way", "over here", "pan the camera",
-            "camera", "rotate", "turn", "move", "point", "look", "left", "right"
-        ]
-
-        text_lower = text.lower()
-        return any(keyword in text_lower for keyword in camera_keywords)
-
-    def trigger_camera_action(self):
-        """Trigger camera rotation action"""
-        logger.info("🎥 TRIGGERING CAMERA ROTATION ACTION")
-        logger.info("📡 This is where we would call the MediaPipe backend")
-
-        with open("hand_position.txt", "r") as f:
-            lines = f.readlines()
-            if lines:
-                last_position = lines[-1].strip()
-                logger.info(f"📍 Last hand position: {last_position}")
-            else:
-                logger.info("📍 No hand positions recorded yet")
-
-    def start_audio_input(self):
-        """Start audio input stream"""
-        try:
-            self.input_stream = self.audio.open(
-                format=self.format,
-                channels=self.channels,
-                rate=self.sample_rate,
-                input=True,
-                frames_per_buffer=self.chunk_size,
-                stream_callback=self.audio_input_callback
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Analyze this text: '{text}'"}
+                ],
+                temperature=0.1
             )
-            self.input_stream.start_stream()
-            self.is_recording = True
-            logger.info("🎤 Audio input started")
+
+            result = json.loads(response.choices[0].message.content)
+            return result
         except Exception as e:
-            logger.error(f"❌ Failed to start audio input: {e}")
+            print(f"Error in command analysis: {e}")
+            return {"should_act": False, "confidence": 0.0, "reasoning": "Analysis failed"}
 
-    def audio_input_callback(self, in_data, frame_count, time_info, status):
-        """Callback for audio input"""
-        if self.is_recording and not self.should_stop:
-            # Only send audio if we're not receiving a response
-            if not self.is_speaking or len(self.audio_output_buffer) == 0:
-                self.audio_input_queue.put(in_data)
-        return (None, pyaudio.paContinue)
-
-    async def send_audio_data(self):
-        """Send audio data to the Realtime API"""
-        while not self.should_stop and self.is_connected:
-            try:
-                if not self.audio_input_queue.empty():
-                    audio_data = self.audio_input_queue.get_nowait()
-
-                    # Convert to base64 and send to API
-                    audio_base64 = base64.b64encode(audio_data).decode('utf-8')
-
-                    event = {
-                        "type": "input_audio_buffer.append",
-                        "audio": audio_base64
-                    }
-
-                    await self.send_event(event)
-
-                await asyncio.sleep(0.01)  # Small delay to prevent overwhelming the API
-            except queue.Empty:
-                await asyncio.sleep(0.01)
-            except Exception as e:
-                logger.error(f"❌ Error sending audio data: {e}")
-                break
-
-    async def run(self):
-        """Main run loop"""
+    def text_to_speech(self, text):
+        """Convert text to speech using OpenAI TTS"""
         try:
-            # Connect to the Realtime API
-            await self.connect_to_realtime_api()
+            response = self.client.audio.speech.create(
+                model="tts-1",
+                voice="alloy",
+                input=text
+            )
 
-            # Start audio input stream
-            self.start_audio_input()
+            # Save to temporary file and play
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+            response.stream_to_file(temp_file.name)
 
-            # Start audio playback thread
-            self.start_playback_thread()
+            # Play the audio file (using system command)
+            os.system(f"afplay {temp_file.name}")  # macOS
 
-            logger.info("🎤 Voice Agent Started! Speak to interact with the camera system")
-            logger.info("📋 Try saying: 'rotate the camera' or 'move the camera this way'")
+            # Clean up
+            os.unlink(temp_file.name)
 
-            # Create tasks for handling events and sending audio
-            tasks = [
-                asyncio.create_task(self.handle_server_events()),
-                asyncio.create_task(self.send_audio_data())
-            ]
+        except Exception as e:
+            print(f"Error in text-to-speech: {e}")
 
-            # Wait for tasks to complete
-            await asyncio.gather(*tasks, return_exceptions=True)
+    def trigger_camera_action(self, *, direction=None):
+        """Placeholder for camera rotation action"""
+        print("🎥 TRIGGERING CAMERA ROTATION ACTION")
+        print("📡 This is where we would call the MediaPipe backend")
+
+        angle = None
+        if direction == "left":
+            angle = -90
+        elif direction == "right":
+            angle = 90
+        elif direction == "forward":
+            angle = 0
+        else:
+            with open("hand_position.txt", "r") as f:
+                lines = f.readlines()
+                if lines:
+                    last_position = float(lines[-1].strip())
+                    angle = last_position * 90
+
+        angle = round(angle)
+
+        # Send angle over serial
+        self.serial.write(f"move {angle} degrees\n".encode())
+
+        # Speak the response
+        response_text = f"Rotating the camera to {angle} degrees"
+        print(f"🔊 Speaking: {response_text}")
+        self.text_to_speech(response_text)
+
+        
+
+    def listen_continuous(self):
+        """Main loop to continuously listen for voice commands"""
+        print("🎤 Voice Agent Started! Press Ctrl+C to stop")
+        print("📋 Listening for commands like 'rotate the camera in the direction I'm pointing'")
+
+        try:
+            while True:
+                # Record audio
+                audio_file = self.record_audio()
+
+                try:
+                    # Convert to text
+                    text = self.speech_to_text(audio_file)
+
+                    if text:
+                        print(f"🗣️  Heard: '{text}'")
+
+                        # Analyze the command
+                        analysis = self.analyze_command(text)
+                        print(f"🧠 Analysis: {analysis}")
+
+                        if analysis["should_act"] and analysis["confidence"] > 0.5:
+                            print("✅ Command recognized! Triggering camera action...")
+                            self.trigger_camera_action(direction=analysis.get("direction"))
+                        else:
+                            print("❌ Command not recognized or confidence too low")
+                    else:
+                        print("🔇 No speech detected")
+
+                except Exception as e:
+                    print(f"Error processing audio: {e}")
+
+                finally:
+                    # Clean up audio file
+                    if os.path.exists(audio_file):
+                        os.unlink(audio_file)
+
+                # Small delay before next recording
+                time.sleep(0.01)
 
         except KeyboardInterrupt:
-            logger.info("\n🛑 Voice Agent stopped by user")
-        except Exception as e:
-            logger.error(f"❌ Error in main loop: {e}")
+            print("\n🛑 Voice Agent stopped")
         finally:
-            await self.cleanup()
-
-    async def cleanup(self):
-        """Clean up resources"""
-        self.should_stop = True
-        self.is_recording = False
-
-        # Stop audio streams
-        if self.input_stream:
-            self.input_stream.stop_stream()
-            self.input_stream.close()
-
-        # Wait for playback thread to finish
-        if self.playback_thread and self.playback_thread.is_alive():
-            self.playback_thread.join(timeout=2)
-
-        # Close WebSocket connection
-        if self.websocket and self.is_connected:
-            await self.websocket.close()
-
-        # Terminate PyAudio
-        self.audio.terminate()
-
-        logger.info("🧹 Cleanup completed")
+            self.audio.terminate()
 
 
-async def main():
-    """Main function"""
+def main():
     # Check if OpenAI API key is set
     if not os.getenv("OPENAI_API_KEY"):
-        logger.error("❌ Please set your OPENAI_API_KEY environment variable")
-        logger.error("You can create a .env file with: OPENAI_API_KEY=your_api_key_here")
+        print("❌ Please set your OPENAI_API_KEY environment variable")
+        print("You can create a .env file with: OPENAI_API_KEY=your_api_key_here")
         return
 
-    agent = RealtimeVoiceAgent()
-    await agent.run()
+    agent = VoiceAgent()
+    agent.listen_continuous()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

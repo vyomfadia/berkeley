@@ -1755,6 +1755,7 @@ dependencies = [
     { name = "numpy" },
     { name = "openai" },
     { name = "pyaudio" },
+    { name = "pyserial" },
     { name = "python-dotenv" },
     { name = "realtimestt" },
 ]
@@ -1764,6 +1765,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "openai", specifier = ">=1.0.0" },
     { name = "pyaudio", specifier = ">=0.2.11" },
+    { name = "pyserial", specifier = ">=3.5" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "realtimestt", specifier = ">=0.3.104" },
 ]

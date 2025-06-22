@@ -10,6 +10,7 @@ dependencies = [
     "numpy>=1.24.0",
     "python-dotenv>=1.0.0",
     "realtimestt>=0.3.104",
+    "pyserial>=3.5",
 ]
 
 [build-system]
