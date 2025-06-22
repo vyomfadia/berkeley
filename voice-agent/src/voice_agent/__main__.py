@@ -8,6 +8,7 @@ import pyaudio
 from dotenv import load_dotenv
 from openai import OpenAI
 import serial
+from vapi_python import Vapi
 
 # Load environment variables
 load_dotenv()
@@ -15,8 +16,10 @@ load_dotenv()
 
 class VoiceAgent:
     def __init__(self):
+        self.vapi = Vapi(api_key=os.getenv("VAPI_API_KEY"))
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.is_listening = False
+
         # Audio recording settings
         self.chunk = 1024
         self.format = pyaudio.paInt16
@@ -179,8 +182,6 @@ class VoiceAgent:
         response_text = f"Rotating the camera to {angle} degrees"
         print(f"🔊 Speaking: {response_text}")
         self.text_to_speech(response_text)
-
-        
 
     def listen_continuous(self):
         """Main loop to continuously listen for voice commands"""
