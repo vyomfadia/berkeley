@@ -107,5 +107,3 @@ https://ieeexplore.ieee.org/document/10029140 <- fetal heart rate monitoring
 https://sh-tsang.medium.com/review-heart-sound-classification-using-deep-learning-techniques-based-on-log-mel-spectrogram-9a3e5e49c8d5
 
 https://github.com/smoijueh/Heartbeat-Sound-Classifier/blob/master/heartbeat_sounds.ipynb
-
-
