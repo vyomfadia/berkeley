@@ -24,21 +24,14 @@ while cap.isOpened():
     image = cv2.flip(image, 1)
 
     results = hands.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-
-    # Draw hand landmarks
     if results.multi_hand_landmarks:
         for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
-            # Get hand position
             landmarks = hand_landmarks.landmark
             wrist_x = int(landmarks[mp_hands.HandLandmark.WRIST].x * w)
 
-            # Determine which side of the camera the hand is on
-            side = "Left side" if wrist_x < w / 2 else "Right side"
-
-            # Get handedness (left hand or right hand)
             handedness = results.multi_handedness[idx].classification[0].label
+            linear_position = (wrist_x / w * 2) - 1  # normalise for domain [-1, 1]
 
-            # Draw the hand landmarks
             mp_drawing.draw_landmarks(
                 image,
                 hand_landmarks,
@@ -47,8 +40,7 @@ while cap.isOpened():
                 mp_drawing_styles.get_default_hand_connections_style()
             )
 
-            # Display handedness and side information
-            cv2.putText(image, f"{handedness} hand on {side}",
+            cv2.putText(image, f"{handedness} hand at {linear_position}",
                         (10, 30 + idx * 30), cv2.FONT_HERSHEY_SIMPLEX,
                         0.7, (0, 255, 0), 2)
 
