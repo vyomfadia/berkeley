@@ -14,15 +14,14 @@
 #define DEBUG 1 // Set to 1 to enable debug mode, 0 to disable
 
 const int stepsPerRevolution = 2048;
-const float stepPerDegree = stepsPerRevolution / 90;
+const float stepPerDegree = stepsPerRevolution / 270;
 
 float current_pos = 0; // Current position of the stepper motor
 
-bool left = false;
-bool right = false;
+bool negative = false;
 
 void Move(float deg);
-char** str_split(char* a_str, const char a_delim);
+const char* sanitize(const char *num);
 
 #define MAX_TOKENS 4
 
@@ -41,40 +40,35 @@ void loop() {
 
   if (Serial.available() || DEBUG) {
     //command = Serial.readStringUntil('\n').c_str();
-    command = "move -59.8";
-    char temp[32];
-    strncpy(temp, command, sizeof(temp)-1);
-    temp[sizeof(temp)-1] = '\0';
-    char **tokens = str_split(temp, ' ');
-    if (tokens[0] && tokens[1]) {
-      char *nums = tokens[1];
-      int negative = 1;
-      if (nums[0] == '-') {
-        left = true;
-        right = false;
-        negative = -1;
-        nums++;
-      }
-      else {
-        left = false;
-        right = true;
-      }
-      float angle = atof(nums) * negative;
+      const char *command = "40.5";
+      const char *cleaned = sanitize(command);
+      float angle = atof(cleaned) * (negative ? -1 : 1);
       Serial.print("Moving to absolute position: ");
       Serial.println(angle);
       
       Move(angle);
-      delay(2000);
-    } else {
-      Serial.println("Invalid command");
-    }
+      delay(1000);
+      Move(0);
+      delay(1000);
+      Move(-30);
+      delay(1000);
+      Move(90);
+      delay(1000);
+      Move(0);
+      delay(1000);
+      Move(-90);
+      delay(1000);
   }
   else {
-    Serial.println("No command received");
+    Serial.println("Invalid command");
   }
 }
 
 void Move(float deg) {
+  deg *= -1;
+  if (current_pos == deg){
+    return;
+  }
   // Treat deg as absolute target position, not relative movement
   float target = deg;
   // Clamp the target to the allowed range
@@ -92,20 +86,20 @@ void Move(float deg) {
   Serial.println(current_pos);
 }
 
-// Safe split function for Arduino (no malloc, static buffer, max tokens)
-char** str_split(char* a_str, const char a_delim) {
-    static char* tokens[MAX_TOKENS + 1];
-    static char buffer[64];
-    size_t len = strlen(a_str);
-    if (len >= sizeof(buffer)) len = sizeof(buffer) - 1;
-    strncpy(buffer, a_str, len);
-    buffer[len] = '\0';
-    size_t idx = 0;
-    char* token = strtok(buffer, &a_delim);
-    while (token && idx < MAX_TOKENS) {
-        tokens[idx++] = token;
-        token = strtok(NULL, &a_delim);
+// Safe sanitize function for Arduino (no malloc, static buffer)
+const char* sanitize(const char *num) {
+  static char out[16];
+  int j = 0;
+  negative = false;
+  for (int i = 0; num[i] != '\0' && j < (int)sizeof(out)-1; i++) {
+    if (num[i] == '-') {
+      negative = true;
+      continue;
     }
-    tokens[idx] = NULL;
-    return tokens;
+    if (isdigit((unsigned char)num[i]) || num[i] == '.') {
+      out[j++] = num[i];
+    }
+  }
+  out[j] = '\0';
+  return out;
 }
