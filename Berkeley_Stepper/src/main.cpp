@@ -60,11 +60,11 @@ void loop() {
         right = true;
       }
       float angle = atof(nums) * negative;
+      Serial.print("Moving to absolute position: ");
       Serial.println(angle);
       
       Move(angle);
       delay(2000);
-      Move(-65.0f);
     } else {
       Serial.println("Invalid command");
     }
@@ -75,7 +75,8 @@ void loop() {
 }
 
 void Move(float deg) {
-  float target = current_pos + deg;
+  // Treat deg as absolute target position, not relative movement
+  float target = deg;
   // Clamp the target to the allowed range
   float clamped_target = CLAMP(target, -90.0f, 90.0f);
   float actual_move = clamped_target - current_pos;
