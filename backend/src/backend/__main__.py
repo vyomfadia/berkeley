@@ -5,22 +5,6 @@ import cv2
 import mediapipe as mp
 import websockets
 
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-
-
-async def connect_websocket():
-    try:
-        ws = await asyncio.wait_for(websockets.connect('ws://localhost:8000'), timeout=3)
-        print("yeeehawwww")
-        return ws
-    except (TimeoutError, ConnectionRefusedError, OSError) as e:
-        print("WebSocket connection failed", str(e))
-        return None
-
-
-ws = asyncio.get_event_loop().run_until_complete(connect_websocket())
-
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
     static_image_mode=False,
