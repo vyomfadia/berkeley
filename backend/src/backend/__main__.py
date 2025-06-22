@@ -1,6 +1,25 @@
+from concurrent.futures import TimeoutError
+
+import asyncio
 import cv2
 import mediapipe as mp
-import time
+import websockets
+
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
+
+async def connect_websocket():
+    try:
+        ws = await asyncio.wait_for(websockets.connect('ws://localhost:8000'), timeout=3)
+        print("yeeehawwww")
+        return ws
+    except (TimeoutError, ConnectionRefusedError, OSError) as e:
+        print("WebSocket connection failed", str(e))
+        return None
+
+
+ws = asyncio.get_event_loop().run_until_complete(connect_websocket())
 
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
@@ -44,9 +63,20 @@ while cap.isOpened():
                         (10, 30 + idx * 30), cv2.FONT_HERSHEY_SIMPLEX,
                         0.7, (0, 255, 0), 2)
 
+            if ws:
+                try:
+                    asyncio.get_event_loop().run_until_complete(
+                        ws.send(str(linear_position))
+                    )
+                    print("cheese")
+                except:
+                    ws = None
+
     cv2.imshow('MediaPipe Hand Tracking', image)
     if cv2.waitKey(5) & 0xFF == ord('q'):
         break
 
 cap.release()
 cv2.destroyAllWindows()
+if ws:
+    asyncio.get_event_loop().run_until_complete(ws.close())
