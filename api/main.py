@@ -98,6 +98,6 @@ def health_check():
 if __name__ == '__main__':
     # Check if Gemini API key is set
     if not GEMINI_API_KEY:
-        print("Warning: GEMINI_API_KEY environment variable not set")
+        print("Warning: GOOGLE_API_KEY environment variable not set")
 
     app.run(debug=True, host='0.0.0.0', port=8000)
