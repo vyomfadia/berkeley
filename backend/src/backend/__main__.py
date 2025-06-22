@@ -32,6 +32,8 @@ hands = mp_hands.Hands(
 mp_drawing = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
 
+last_position = None
+
 cap = cv2.VideoCapture(1)
 while cap.isOpened():
     success, image = cap.read()
@@ -51,6 +53,12 @@ while cap.isOpened():
             handedness = results.multi_handedness[idx].classification[0].label
             linear_position = (wrist_x / w * 2) - 1  # normalise for domain [-1, 1]
 
+            linear_position = round(linear_position, 1)
+            if linear_position != last_position:
+                last_position = linear_position
+                with open("hand_position.txt", "a+") as f:
+                    f.write(f"{linear_position}\n")
+
             mp_drawing.draw_landmarks(
                 image,
                 hand_landmarks,
@@ -63,14 +71,6 @@ while cap.isOpened():
                         (10, 30 + idx * 30), cv2.FONT_HERSHEY_SIMPLEX,
                         0.7, (0, 255, 0), 2)
 
-            if ws:
-                try:
-                    asyncio.get_event_loop().run_until_complete(
-                        ws.send(str(linear_position))
-                    )
-                    print("cheese")
-                except:
-                    ws = None
 
     cv2.imshow('MediaPipe Hand Tracking', image)
     if cv2.waitKey(5) & 0xFF == ord('q'):
@@ -78,5 +78,3 @@ while cap.isOpened():
 
 cap.release()
 cv2.destroyAllWindows()
-if ws:
-    asyncio.get_event_loop().run_until_complete(ws.close())

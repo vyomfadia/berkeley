@@ -239,7 +239,14 @@ class RealtimeVoiceAgent:
         """Trigger camera rotation action"""
         logger.info("🎥 TRIGGERING CAMERA ROTATION ACTION")
         logger.info("📡 This is where we would call the MediaPipe backend")
-        # Here you would integrate with your camera control system
+
+        with open("hand_position.txt", "r") as f:
+            lines = f.readlines()
+            if lines:
+                last_position = lines[-1].strip()
+                logger.info(f"📍 Last hand position: {last_position}")
+            else:
+                logger.info("📍 No hand positions recorded yet")
 
     def start_audio_input(self):
         """Start audio input stream"""
@@ -284,7 +291,6 @@ class RealtimeVoiceAgent:
                     await self.send_event(event)
 
                 await asyncio.sleep(0.01)  # Small delay to prevent overwhelming the API
-
             except queue.Empty:
                 await asyncio.sleep(0.01)
             except Exception as e:
